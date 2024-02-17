@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '*'
+  pull_request:
+    branches:
+      - '*'
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            image_version: latest
+          - os: ubuntu-latest
+            image_version: triangle-dev
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      
+      - name: Trigger images stage
+        run: |
+          echo "::set-output name=image_version::${{ matrix.image_version }}"
+        shell: bash
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            image_version: latest
+          - os: ubuntu-latest
+            image_version: triangle-dev
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Docker
+        uses: docker/setup-action@v2
+
+      - name: Install dependencies and run tests
+        run: |
+          # Add commands to install dependencies and run tests
+          apt-get update && apt-get upgrade -y
+          apt-get install -y licensecheck yamllint
+          PROBLEMS=0
+          BAD_FILES=$(licensecheck -r . | grep -Ev '(images/files)|(images/patches)|(README.md)|(CONTRIBUTING.md)|(CONTRIBUTORS)'| grep UNKNOWN) || true
+          [ -z "$BAD_FILES" ] || \
+            (echo "ERROR: Missing license statement in the following files:"; \
+            echo "$BAD_FILES"; exit 1) || \
+            PROBLEMS=$(($PROBLEMS + 1))
+          grep -q "${GITLAB_USER_EMAIL}" CONTRIBUTORS || \
+            grep -q "${GITLAB_USER_NAME}" CONTRIBUTORS || \
+            (echo "ERROR: ${GITLAB_USER_NAME} <${GITLAB_USER_EMAIL}> missing in the CONTRIBUTORS file"; exit 1) || \
+            PROBLEMS=$(($PROBLEMS + 1))
+          exit $PROBLEMS
+        env:
+          IMAGE_VERSION: ${{ matrix.image_version }}
+
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Docker
+        uses: docker/setup-action@v2
+
+      - name: Clean images
+        run: |
+          # Add commands to clean images
+          IMAGES_LIST='aptly autopkgtest base armel/base armhf/base arm64/base i386/base blhc gbp piuparts reprotest lintian generic_tests'
+          if ! [ "${CI_COMMIT_REF_NAME}" = "master" ]; then
+            STAGING_TAG="_${CI_COMMIT_REF_NAME}"
+          fi
+          for IMAGE in $IMAGES_LIST; do
+            reg --registry ${CI_REGISTRY} rm ${CI_PROJECT_PATH}/${IMAGE}:${RELEASE}${STAGING_TAG} || true
+          done
+        env:
+          IMAGES_LIST: 'aptly autopkgtest base armel/base armhf/base arm64/base i386/base blhc gbp piuparts reprotest lintian generic_tests'
+          RELEASE: triangle-dev
+          CI_COMMIT_REF_NAME: ${{ github.ref }}
+          CI_PROJECT_PATH: ${{ github.repository }}
